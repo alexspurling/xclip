@@ -23,7 +23,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <X11/Xlib.h>
-#include <X11/Xatom.h>
 #include "xcdef.h"
 #include "xcprint.h"
 #include "xclib.h"
@@ -31,26 +30,6 @@
 /* global verbosity output level, defaults to OSILENT */
 int xcverb = OSILENT;
 
-/* Table of event names from event numbers */
-const char *evtstr[LASTEvent] = {
-        "ProtocolError", "ProtocolReply", "KeyPress", "KeyRelease",
-        "ButtonPress", "ButtonRelease", "MotionNotify", "EnterNotify",
-        "LeaveNotify", "FocusIn", "FocusOut", "KeymapNotify", "Expose",
-        "GraphicsExpose", "NoExpose", "VisibilityNotify", "CreateNotify",
-        "DestroyNotify", "UnmapNotify", "MapNotify", "MapRequest",
-        "ReparentNotify", "ConfigureNotify", "ConfigureRequest",
-        "GravityNotify", "ResizeRequest", "CirculateNotify",
-        "CirculateRequest", "PropertyNotify", "SelectionClear",
-        "SelectionRequest", "SelectionNotify", "ColormapNotify",
-        "ClientMessage", "MappingNotify", "GenericEvent",};
-
-/* a memset function that won't be optimized away by compler */
-void xcmemzero(void *ptr, size_t len) {
-    if (xcverb >= ODEBUG) {
-        fprintf(stderr, "xclip: debug: Zeroing memory buffer\n");
-    }
-    memset_func(ptr, 0, len);
-}
 
 /* check a pointer to allocated memory, print an error if it's null */
 void xcmemcheck(void *ptr) {
@@ -139,6 +118,8 @@ int xcout(Display *dpy,
     unsigned char *buffer;
     unsigned long pty_size, pty_items, pty_machsize;
 
+    fprintf(stderr,
+            "xclib: debug: evnt type: %d\n", evt.type);
     /* local buffer of text to return */
     unsigned char *ltxt = *txt;
 
@@ -186,10 +167,10 @@ int xcout(Display *dpy,
 
             if (*type == inc) {
                 /* start INCR mechanism by deleting property */
-                if (xcverb >= OVERBOSE) {
+//                if (xcverb >= OVERBOSE) {
                     fprintf(stderr,
                             "xclib: debug: Starting INCR by deleting property\n");
-                }
+//                }
                 XDeleteProperty(dpy, win, pty);
                 XFlush(dpy);
                 *context = XCLIB_XCOUT_INCR;
@@ -228,6 +209,7 @@ int xcout(Display *dpy,
             return (1);
 
         case XCLIB_XCOUT_INCR:
+            fprintf(stderr, "INCR transfer start\n");
             /* To use the INCR method, we basically delete the
              * property with the selection in it, wait for an
              * event indicating that the property has been created,
@@ -305,254 +287,6 @@ int xcout(Display *dpy,
             return (0);
     }
 
-    return (0);
-}
-
-/* put data into a selection, in response to a SelectionRequest event from
- * another window (and any subsequent events relating to an INCR transfer).
- *
- * Arguments are:
- *
- * A display
- * 
- * A window
- * 
- * The event to respond to
- * 
- * A pointer to an Atom. This gets set to the property nominated by the other
- * app in it's SelectionRequest. Things are likely to break if you change the
- * value of this yourself.
- * 
- * The target(UTF8_STRING or XA_STRING) to respond to
- *
- * A pointer to an array of chars to read selection data from.
- * 
- * The length of the array of chars.
- *
- * In the case of an INCR transfer, the position within the array of chars
- * that is being processed.
- *
- * The context that event is the be processed within.
- */
-int xcin(Display *dpy,
-     Window *win,
-     XEvent evt,
-     Atom *pty, Atom target, unsigned char *txt, unsigned long len, unsigned long *pos,
-     unsigned int *context, long *chunk_size) {
-    unsigned long chunk_len;    /* length of current chunk (for incr
-				 * transfers only)
-				 */
-    XEvent res;            /* response to event */
-    static Atom inc;
-    static Atom targets;
-
-    if (!targets) {
-        targets = XInternAtom(dpy, "TARGETS", False);
-    }
-
-    if (!inc) {
-        inc = XInternAtom(dpy, "INCR", False);
-    }
-
-    /* We consider selections larger than a quarter of the maximum
-       request size to be "large". See ICCCM section 2.5 */
-    if (!(*chunk_size)) {
-        *chunk_size = XExtendedMaxRequestSize(dpy) / 4;
-        if (!(*chunk_size)) {
-            *chunk_size = XMaxRequestSize(dpy) / 4;
-        }
-        if (xcverb >= ODEBUG) {
-            fprintf(stderr,
-                    "xclib: debug: INCR chunk size is %ld\n", (*chunk_size));
-        }
-    }
-
-    switch (*context) {
-        case XCLIB_XCIN_NONE:
-            if (xcverb >= ODEBUG)
-                fprintf(stderr, "xclib: debug: context: XCLIB_XCIN_NONE\n");
-
-            if (xcverb >= ODEBUG && evt.xselectionrequest.target) {
-                char *tempstr = XGetAtomName(dpy, evt.xselectionrequest.target);
-                fprintf(stderr, "xclib: debug: target: %s\n", tempstr);
-                XFree(tempstr);
-            }
-
-            if (evt.type != SelectionRequest) {
-                if (xcverb >= ODEBUG) {
-                    fprintf(stderr,
-                            "xclib: debug: ignoring %s event (context is NONE)\n",
-                            evtstr[evt.type]);
-                }
-                return (0);
-            }
-            /* set the window and property that is being used */
-            *win = evt.xselectionrequest.requestor;
-            *pty = evt.xselectionrequest.property;
-
-            /* reset position to 0 */
-            *pos = 0;
-
-            /* put the data into a property */
-            if (evt.xselectionrequest.target == targets) {
-                Atom types[2] = {targets, target};
-
-                if (xcverb >= ODEBUG) {
-                    fprintf(stderr, "xclib: debug: sending list of TARGETS\n");
-                }
-
-                /* send data all at once (not using INCR) */
-                XChangeProperty(dpy,
-                                *win,
-                                *pty,
-                                XA_ATOM,
-                                32, PropModeReplace, (unsigned char *) types,
-                                (int) (sizeof(types) / sizeof(Atom))
-                );
-            } else if (len > *chunk_size) {
-                /* send INCR response */
-                if (xcverb >= ODEBUG) {
-                    fprintf(stderr, "xclib: debug: Starting INCR response\n");
-                }
-                XChangeProperty(dpy, *win, *pty, inc, 32, PropModeReplace, 0, 0);
-
-                /* With the INCR mechanism, we need to know
-                 * when the requestor window changes (deletes)
-                 * its properties
-                 */
-                XSelectInput(dpy, *win, PropertyChangeMask);
-
-                *context = XCLIB_XCIN_INCR;
-            } else {
-                /* send data all at once (not using INCR) */
-                if (xcverb >= ODEBUG) {
-                    fprintf(stderr, "xclib: debug: Sending data all at once"
-                                    " (%d bytes)\n", (int) len);
-                }
-
-                XChangeProperty(dpy,
-                                *win,
-                                *pty,
-                                target,
-                                8, PropModeReplace, (unsigned char *) txt,
-                                (int) len);
-            }
-
-            /* Perhaps FIXME: According to ICCCM section 2.5, we should
-               confirm that XChangeProperty succeeded without any Alloc
-               errors before replying with SelectionNotify. However, doing
-               so would require an error handler which modifies a global
-               variable, plus doing XSync after each XChangeProperty. */
-
-            /* set values for the response event */
-            res.xselection.property = *pty;
-            res.xselection.type = SelectionNotify;
-            res.xselection.display = evt.xselectionrequest.display;
-            res.xselection.requestor = *win;
-            res.xselection.selection = evt.xselectionrequest.selection;
-            res.xselection.target = evt.xselectionrequest.target;
-            res.xselection.time = evt.xselectionrequest.time;
-
-            /* send the response event */
-            XSendEvent(dpy, evt.xselectionrequest.requestor, 0, 0, &res);
-            XFlush(dpy);
-
-            /* don't treat TARGETS request as contents request */
-            if (evt.xselectionrequest.target == targets)
-                return (1);        /* Finished with request */
-
-            /* if len <= chunk_size, then the data was sent all at
-             * once and the transfer is now complete, return 1
-             */
-            if (len > *chunk_size)
-                return (0);
-            else
-                return (1);
-
-            break;
-
-        case XCLIB_XCIN_INCR:
-            /* length of current chunk */
-
-            /* ignore non-property events */
-            if (evt.type != PropertyNotify)
-                return (0);
-
-            /* ignore the event unless it's to report that the
-             * property has been deleted
-             */
-            if (evt.xproperty.state != PropertyDelete) {
-                if (xcverb >= ODEBUG) {
-                    if (evt.xproperty.state == 0)
-                        fprintf(stderr,
-                                "xclib: debug: ignoring PropertyNewValue\n");
-                    else
-                        fprintf(stderr,
-                                "xclib: debug: ignoring state %d\n",
-                                evt.xproperty.state);
-                }
-                return (0);
-            }
-
-            /* set the chunk length to the maximum size */
-            chunk_len = *chunk_size;
-
-            /* if a chunk length of maximum size would extend
-             * beyond the end ot txt, set the length to be the
-             * remaining length of txt
-             */
-            if ((*pos + chunk_len) > len)
-                chunk_len = len - *pos;
-
-            /* if the start of the chunk is beyond the end of txt,
-             * then we've already sent all the data, so set the
-             * length to be zero
-             */
-            if (*pos > len)
-                chunk_len = 0;
-
-            if (chunk_len) {
-                /* put the chunk into the property */
-                if (xcverb >= ODEBUG) {
-                    fprintf(stderr, "xclib: debug: Sending chunk of "
-                                    " %d bytes\n", (int) chunk_len);
-                }
-                XChangeProperty(dpy,
-                                *win,
-                                *pty,
-                                target,
-                                8, PropModeReplace, &txt[*pos],
-                                (int) chunk_len);
-            } else {
-                /* make an empty property to show we've
-                 * finished the transfer
-                 */
-                if (xcverb >= ODEBUG) {
-                    fprintf(stderr, "xclib: debug: Signalling end of INCR\n");
-                }
-                XChangeProperty(dpy, *win, *pty, target, 8, PropModeReplace, 0, 0);
-            }
-            XFlush(dpy);
-
-            /* all data has been sent, break out of the loop */
-            if (!chunk_len) {
-                if (xcverb >= ODEBUG) {
-                    fprintf(stderr, "xclib: debug: Finished INCR transfer.\n");
-                }
-                *context = XCLIB_XCIN_NONE;
-            }
-
-            *pos += *chunk_size;
-
-            /* if chunk_len == 0, we just finished the transfer,
-             * return 1
-             */
-            if (chunk_len > 0)
-                return (0);
-            else
-                return (1);
-            break;
-    }
     return (0);
 }
 
