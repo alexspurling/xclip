@@ -23,7 +23,7 @@
 #include <stdlib.h>
 
 #include <X11/Xlib.h>
-#include <X11/Xmu/Atoms.h>
+#include "Atoms.h"
 #include "xcdef.h"
 #include "xcprint.h"
 #include "xclib.h"
